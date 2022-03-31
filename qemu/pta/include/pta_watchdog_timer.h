@@ -1,0 +1,10 @@
+#ifndef __PTA_WATCHDOG_TIMER_H
+#define __PTA_WATCHDOG_TIMER_H
+
+#define PTA_WATCHDOG_TIMER_UUID \
+		{ 0x44c9884e, 0x9e5f, 0x48d9, \
+			{ 0x9b, 0x78, 0x4d, 0x14, 0x1a, 0x2f, 0xec, 0xab } }
+
+#endif 
+
+#define BASE_ADDRESS 0x3F100000

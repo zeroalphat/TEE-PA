@@ -1,0 +1,282 @@
+diff --git a/kernel/audit.c b/kernel/audit.c
+index 7efaece53..fffabc0e9 100644
+--- a/kernel/audit.c
++++ b/kernel/audit.c
+@@ -47,6 +47,10 @@
+ #include <linux/mutex.h>
+ #include <linux/gfp.h>
+ #include <linux/pid.h>
++#include <linux/tee_drv.h>
++#include <linux/uuid.h>
++#include <linux/utsname.h>
++#include "optee_private.h"
+ 
+ #include <linux/audit.h>
+ 
+@@ -68,10 +72,45 @@
+ #define AUDIT_UNINITIALIZED	0
+ #define AUDIT_INITIALIZED	1
+ static int	audit_initialized;
++static struct tee_context *tee_ctx = NULL;
++static struct tee_ioctl_open_session_arg sess_arg;
+ 
+ u32		audit_enabled = AUDIT_OFF;
+ bool		audit_ever_enabled = !!AUDIT_OFF;
+ 
++//ring buffer
++#define QUEUE_SIZE 15000
++int queue_head,queue_num=0;
++
++struct queue {
++	char data[1024];
++};
++
++struct queue test_queue[QUEUE_SIZE];
++
++int enqueue(char *audit_log){
++	size_t len = strlen(audit_log);
++
++	if (queue_num < QUEUE_SIZE) {
++		strcpy(test_queue[(queue_head+ queue_num) % QUEUE_SIZE].data, audit_log);
++		queue_num++;
++		return 0;
++	} else {
++		return -1;
++	}
++}
++
++int dequeue(char *audit_log) {
++	if (queue_num > 0) {
++		strcpy(audit_log, test_queue[queue_head].data);
++		queue_head = (queue_head + 1) % QUEUE_SIZE;
++		queue_num--;
++		return 0;
++	} else {
++		return -1;
++	}
++}
++
+ EXPORT_SYMBOL_GPL(audit_enabled);
+ 
+ /* Default state when kernel boots without any parameters. */
+@@ -695,6 +734,141 @@ static int auditd_send_unicast_skb(struct sk_buff *skb)
+ 	return rc;
+ }
+ 
++static int optee_ctx_match(struct tee_ioctl_version_data *ver, const void *data)
++{
++	if (ver->impl_id == TEE_IMPL_ID_OPTEE)
++		return 1;
++	else
++		return 0;
++}
++
++//invoke TA
++static int ta_invoke(struct tee_context *ctx, u32 session,
++		     struct tee_shm *device_shm, u32 *shm_size, u32 func,
++		     char *send_data, size_t send_data_len)
++{
++	int ret = 0;
++	struct tee_ioctl_invoke_arg inv_arg;
++	struct tee_param param[4];
++
++	//pr_info("send_data: %s \n", send_data);
++	memset(&inv_arg, 0, sizeof(inv_arg));
++	memset(&param, 0, sizeof(param));
++
++	/* allocate shared memory for nw->sw data */
++	device_shm = tee_shm_alloc(ctx, send_data_len,
++				   TEE_SHM_MAPPED | TEE_SHM_DMA_BUF);
++	if (IS_ERR(device_shm)) {
++		pr_err("tx shm pool alloc failed\n");
++		return -1;
++	}
++	
++	memcpy((u8 *)device_shm->kaddr, send_data, send_data_len);
++
++	inv_arg.func = func;
++	inv_arg.session = session;
++	inv_arg.num_params = 4;
++
++	/* Fill invoke cmd params */
++	param[0].attr =
++		TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT; //TEE_PARAM_TYPESを指定
++	param[0].u.memref.shm = device_shm;
++	param[0].u.memref.size = send_data_len;
++	param[0].u.memref.shm_offs = 0;
++
++	ret = tee_client_invoke_func(ctx, &inv_arg, param);
++	if ((ret < 0) || ((inv_arg.ret != TEEC_SUCCESS) &&
++			  (inv_arg.ret != TEEC_ERROR_SHORT_BUFFER))) {
++		pr_err("PTA_CMD_GET_DEVICES invoke function err: %x\n",
++		       inv_arg.ret);
++		return -EINVAL;
++	}
++
++	//shm_sizeを呼ぶとSegmentation faultを起こす
++	//*shm_size = param[0].u.memref.size;
++	tee_shm_free(device_shm);
++
++	return 0;
++}
++
++static int ta_create_session(void) {
++	const uuid_t introspection_ta_uuid =
++	UUID_INIT(0x627a757a, 0x9924, 0x11ec, 0xb9, 0x09, 0x02, 
++		  	 0x42, 0xac, 0x12, 0x00, 0x02);
++	int rc = 0;
++
++	memset(&sess_arg, 0, sizeof(sess_arg));
++
++	//pr_info("call tee_client_open_context");
++	//* Open context with OP-TEE driver */
++	tee_ctx = tee_client_open_context(NULL, optee_ctx_match, NULL, NULL);
++	if (IS_ERR(tee_ctx)) {
++		pr_err("open context failed\n");
++		return -1;
++	}
++
++	//* Open session with device enumeration pseudo TA */
++	export_uuid(sess_arg.uuid, &introspection_ta_uuid);
++	sess_arg.clnt_login = TEE_IOCTL_LOGIN_PUBLIC;
++	sess_arg.num_params = 0;
++
++	//tee_client_open_sesion
++	rc = tee_client_open_session(tee_ctx, &sess_arg, NULL);
++	if ((rc < 0) || (sess_arg.ret != TEEC_SUCCESS)) {
++		pr_err("open session failed\n");
++		rc = 0;
++		tee_client_close_context(tee_ctx);
++		return -1;
++	}
++	return 0;
++}
++
++//send event log to TA-Collect
++static int send_eventlog_ta_collect(void) {
++ 	size_t log_msg_len;
++	u32 shm_size = 0;
++	u32 func = 0x1; //invoke_command id
++	int rc = 0;
++	char event_log[1024];
++	char summary_log[12000];
++
++	// TEEとsessionが開いているかの確認	
++	// sessionがない場合は作成
++	// TAが立ち上がっていない場合は，event logを送らない(起動時など)
++	if (tee_ctx == NULL) {
++		rc = ta_create_session();
++		if (rc < 0) {
++			tee_ctx = NULL;
++			pr_err("evnt log send failed\n");
++			return -1;
++		}
++	}
++
++	//文字列の初期化
++	memset(summary_log, '\0', strlen(summary_log));
++
++	//文字列の結合
++	while (dequeue(event_log) != 1 && queue_num > 0) {
++		strcat(summary_log, event_log);
++		strcat(summary_log, "\n");
++		//pr_info("%s", summary_log);
++		log_msg_len = strlen(summary_log);
++		if (log_msg_len > 10000) {
++			break;
++		}
++	}
++
++	rc = ta_invoke(tee_ctx, sess_arg.session, NULL, &shm_size, func,
++		       summary_log, log_msg_len);
++	if (rc < 0) {
++		tee_client_close_session(tee_ctx, sess_arg.session);
++		tee_ctx = NULL;
++		return -1;
++	}
++
++	return 0;
++}
++
+ /**
+  * kauditd_send_queue - Helper for kauditd_thread to flush skb queues
+  * @sk: the sending sock
+@@ -720,6 +894,9 @@ static int kauditd_send_queue(struct sock *sk, u32 portid,
+ 	struct sk_buff *skb;
+ 	static unsigned int failed = 0;
+ 
++
++
++
+ 	/* NOTE: kauditd_thread takes care of all our locking, we just use
+ 	 *       the netlink info passed to us (e.g. sk and portid) */
+ 
+@@ -816,10 +993,13 @@ static int kauditd_thread(void *dummy)
+ 	struct sock *sk = NULL;
+ 	struct auditd_connection *ac;
+ 
++
++
+ #define UNICAST_RETRIES 5
+ 
+ 	set_freezable();
+ 	while (!kthread_should_stop()) {
++
+ 		/* NOTE: see the lock comments in auditd_send_unicast_skb() */
+ 		rcu_read_lock();
+ 		ac = rcu_dereference(auditd_conn);
+@@ -852,6 +1032,7 @@ static int kauditd_thread(void *dummy)
+ 			goto main_queue;
+ 		}
+ 
++
+ main_queue:
+ 		/* process the main queue - do the multicast send and attempt
+ 		 * unicast, dump failed record sends to the retry queue; if
+@@ -865,6 +1046,14 @@ static int kauditd_thread(void *dummy)
+ 			auditd_reset(ac);
+ 		sk = NULL;
+ 
++		//call ta
++		//bufferの内容が以上あれば
++		if (queue_num >= 500) {
++			send_eventlog_ta_collect();
++		}
++
++
++
+ 		/* drop our netns reference, no auditd sends past this line */
+ 		if (net) {
+ 			put_net(net);
+@@ -880,6 +1069,7 @@ static int kauditd_thread(void *dummy)
+ 		 *       main queue to the retry/hold queues */
+ 		wait_event_freezable(kauditd_wait,
+ 				     (skb_queue_len(&audit_queue) ? 1 : 0));
++
+ 	}
+ 
+ 	return 0;
+@@ -2370,14 +2560,22 @@ void audit_log_end(struct audit_buffer *ab)
+ {
+ 	struct sk_buff *skb;
+ 	struct nlmsghdr *nlh;
++	char *log_msg, *hostname;
+ 
+ 	if (!ab)
+ 		return;
+ 
+ 	if (audit_rate_check()) {
++		hostname = utsname()->nodename;
++		audit_log_format(ab, ",node=%s", hostname);
++
++		nlh = nlmsg_hdr(ab->skb);
++		log_msg = nlmsg_data(nlh);
++		enqueue(log_msg);
++
+ 		skb = ab->skb;
+ 		ab->skb = NULL;
+-
++		
+ 		/* setup the netlink header, see the comments in
+ 		 * kauditd_send_multicast_skb() for length quirks */
+ 		nlh = nlmsg_hdr(skb);

@@ -1,0 +1,48 @@
+version: '3.8'
+services:
+  optee:
+    build: ./qemu
+    stdin_open: true
+    tty: true
+    command: bash -c 'echo "c" | make -j12 CFG_CORE_DYN_SHM=n CFG_CRYPTOLIB_NAME=mbedtls CFG_CRYPTOLIB_DIR=lib/libmbedtls run-only'   
+
+  # SPADE
+  spade:
+    build: ./SPADE
+    container_name: spade
+    hostname: spade
+    stdin_open: true
+    volumes:
+      - /var/run:/var/run
+    command: "./bin/spade debug"
+    depends_on: 
+      - receiver
+
+  # Log Receiver
+  receiver:
+    build: ./Log_Receiver
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run:/var/run
+
+  # terminal
+  ree:
+    build: ./soc_term
+    container_name: ree-terminal
+    hostname: ree-terminal
+    tty: true
+    stdin_open: true
+    ports: 
+      - "54320:54320"
+    command: "54320"
+  tee:
+    build: ./soc_term
+    container_name: tee-terminal
+    hostname: tee-terminal
+    tty: true
+    stdin_open: true
+    ports: 
+      - "54321:54321"
+    command: "54321"
+ 

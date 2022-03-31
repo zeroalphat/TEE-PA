@@ -1,0 +1,512 @@
+diff --git a/cfg/spade.reporter.Audit.config b/cfg/spade.reporter.Audit.config
+index c622862d..da7d2280 100644
+--- a/cfg/spade.reporter.Audit.config
++++ b/cfg/spade.reporter.Audit.config
+@@ -28,7 +28,7 @@ kernelModuleDeleteBinary=bin/deleteModule
+ # 1. 'default': only the system calls handled by the reporter
+ # 2. 'none': no audit rules
+ # 3. 'all': all the system calls
+-syscall=default
++syscall=none
+ # Whether to exclude audit records of type 'PROCTITLE' or not
+ excludeProctitle=true
+ # Capture and handle 'setfsuid' and 'setfsgid' system calls or not
+@@ -41,7 +41,7 @@ fsids=false
+ # Set to non-positive number to not rotate.
+ outputLogRotate=0
+ 
+-linuxAuditSocket=/var/run/audispd_events
++linuxAuditSocket=/var/run/iot_events
+ #inputLog=
+ rotate=false
+ #inputDir=
+diff --git a/src/spade/reporter/Audit.java b/src/spade/reporter/Audit.java
+index ae11e6fe..1ddd6842 100644
+--- a/src/spade/reporter/Audit.java
++++ b/src/spade/reporter/Audit.java
+@@ -166,16 +166,16 @@ public class Audit extends AbstractReporter {
+ 	private volatile boolean isMainEventLoopThreadRunning = false;
+ 	private final Thread mainEventLoopThread = new Thread(new Runnable(){
+ 		@Override
+-		public void run(){
++        public void run() {
+ 			isMainEventLoopThreadRunning = true;
+ 			while(true){
+ 				Map<String, String> eventData = null;
+ 				try{
+ 					eventData = auditEventReader.readEventData();
+ 					if(eventData == null){
+-						// EOF
++                        logger.log(Level.INFO, "eventData is null");
+ 						break;
+-					}else{
++                    } else {
+ 						try{
+ 							finishEvent(eventData);
+ 						}catch(Exception e){
+@@ -187,9 +187,9 @@ public class Audit extends AbstractReporter {
+ 					}
+ 				}catch(MalformedAuditDataException made){
+ 					logger.log(Level.SEVERE, "Failed to parse event", made);
+-					if(FAIL_FAST){
+-						break;
+-					}
++					//if(FAIL_FAST){
++						//break;
++					//}
+ 				}catch(Exception e){
+ 					logger.log(Level.SEVERE, "Stopped reading event stream. ", e);
+ 					break;
+@@ -748,7 +748,8 @@ public class Audit extends AbstractReporter {
+ 			return false;
+ 		}
+ 		
+-		try{
++        try {
++            logger.log(Level.INFO, "mainEventLoopThread start");
+ 			this.mainEventLoopThread.start();
+ 		}catch(Exception e){
+ 			logger.log(Level.SEVERE, "Failed to instantiate/start main event reader thread", e);
+@@ -925,10 +926,10 @@ public class Audit extends AbstractReporter {
+ 
+ 	private void setHandleKMRecordsFlag(boolean isLiveAudit, boolean valueOfHandleKMRecords){
+ 		// Only set the value if it hasn't been set and is log playback
+-		if(!kernelModuleConfiguration.isHandleLocalEndpointsSpecified() && !isLiveAudit){
+-			kernelModuleConfiguration.setHandleLocalEndpoints(valueOfHandleKMRecords);
+-			logger.log(Level.INFO, "'" + KernelModuleConfiguration.keyHandleLocalEndpoints + "' value set to '"+valueOfHandleKMRecords+"'");
+-		}
++		//if(!kernelModuleConfiguration.isHandleLocalEndpointsSpecified() && !isLiveAudit){
++		kernelModuleConfiguration.setHandleLocalEndpoints(valueOfHandleKMRecords);
++		logger.log(Level.INFO, "'" + KernelModuleConfiguration.keyHandleLocalEndpoints + "' value set to '"+valueOfHandleKMRecords+"'");
++		//}
+ 	}
+ 
+ 	private void finishEvent(Map<String, String> eventData){
+@@ -941,7 +942,9 @@ public class Audit extends AbstractReporter {
+ 		}
+ 
+ 		try{
+-			String recordType = eventData.get(AuditEventReader.RECORD_TYPE_KEY);
++			logger.log(Level.INFO, "reading start");
++            String recordType = eventData.get(AuditEventReader.RECORD_TYPE_KEY);
++            logger.log(Level.INFO, "record type: " + recordType);
+ 			if(AuditEventReader.RECORD_TYPE_UBSI_ENTRY.equals(recordType)){
+ 				processManager.handleUnitEntry(eventData);
+ 			}else if(AuditEventReader.RECORD_TYPE_UBSI_EXIT.equals(recordType)){
+@@ -987,28 +990,31 @@ public class Audit extends AbstractReporter {
+ 					log(Level.WARNING, "Invalid syscall: " + syscallNumber, null, time, eventId, null);
+ 				}else{
+ 					switch (syscall) {
+-						case BIND:
+-							handleBindKernelModule(eventData, time, eventId, syscall, pid,
+-									exit, sockFd, sockType, localSaddr, remoteSaddr);
++                        case BIND:
++                            handleBind(eventData, syscall);
++							//handleBindKernelModule(eventData, time, eventId, syscall, pid,
++							//		exit, sockFd, sockType, localSaddr, remoteSaddr);
+ 							break;
+ 						case ACCEPT:
+-						case ACCEPT4:
+-							handleAcceptKernelModule(eventData, time, eventId, syscall, pid, 
+-									exit, sockFd, sockType, localSaddr, remoteSaddr);
++                        case ACCEPT4:
++                            handleAccept(eventData, syscall);
++							//handleAcceptKernelModule(eventData, time, eventId, syscall, pid, 
++							//		exit, sockFd, sockType, localSaddr, remoteSaddr);
+ 							break;
+-						case CONNECT:
+-							handleConnectKernelModule(eventData, time, eventId, syscall, pid,
+-									exit, sockFd, sockType, localSaddr, remoteSaddr);
++                        case CONNECT:
++                            handleConnect(eventData, syscall);
++							//handleConnectKernelModule(eventData, time, eventId, syscall, pid,
++							//		exit, sockFd, sockType, localSaddr, remoteSaddr);
+ 							break;
+ 						case SENDMSG:
+ 						case SENDTO:
+-//						case SENDMMSG: // TODO
++                            //						case SENDMMSG: // TODO
+ 							handleNetworkIOKernelModule(eventData, time, eventId, syscall, pid, exit, sockFd, 
+ 									sockType, localSaddr, remoteSaddr, false);
+ 							break;
+ 						case RECVMSG:
+ 						case RECVFROM:
+-//						case RECVMMSG:
++                            //						case RECVMMSG:
+ 							handleNetworkIOKernelModule(eventData, time, eventId, syscall, pid, exit, sockFd, 
+ 									sockType, localSaddr, remoteSaddr, true);
+ 							break;
+@@ -1024,7 +1030,8 @@ public class Audit extends AbstractReporter {
+ 	}
+ 	
+ 	private SYSCALL getSyscall(int syscallNumber){
+-		return SYSCALL.get64BitSyscall(syscallNumber);
++		//return SYSCALL.get64BitSyscall(syscallNumber);
++		return SYSCALL.get64BitArmSyscall(syscallNumber);
+ 	}
+ 	
+ 	/**
+@@ -1090,16 +1097,19 @@ public class Audit extends AbstractReporter {
+ 			
+ 			int syscallNum = HelperFunctions.parseInt(eventData.get(AuditEventReader.SYSCALL), -1);
+ 			
+-			if(syscallNum == -1){
++            if (syscallNum == -1) {
++                log(Level.INFO, "parse audit log failed", null, time,eventId, null);
+ 				return;
+ 			}
+ 			
+-			SYSCALL syscall = getSyscall(syscallNum);
++            SYSCALL syscall = getSyscall(syscallNum);
++            log(Level.INFO, "syscall number:" +syscall, null, time, eventId, null);
+ 			
+ 			if(syscall == null){
+ 				log(Level.WARNING, "Invalid syscall: " + syscallNum, null, time, eventId, null);
+ 				return;
+-			}else if(syscall == SYSCALL.UNSUPPORTED){
++            } else if (syscall == SYSCALL.UNSUPPORTED) {
++                log(Level.INFO, "unsupported syscall ", null, time, eventId, null);
+ 				return;
+ 			}
+ 
+@@ -1119,23 +1129,6 @@ public class Audit extends AbstractReporter {
+ 			//convert all arguments from hexadecimal format to decimal format and replace them. done for convenience here and to avoid issues. 
+ 			convertArgsHexToDec(eventData, time, eventId, syscall);
+ 			
+-			// Check if one of the network related syscalls. Must do this check before because HANDLE_KM_RECORDS can be null
+-			switch (syscall) {
+-				case SENDMSG:
+-				case SENDTO:
+-				case RECVFROM: 
+-				case RECVMSG:
+-				case SOCKET:
+-				case BIND:
+-				case ACCEPT:
+-				case ACCEPT4:
+-				case CONNECT:
+-					setHandleKMRecordsFlag(input.isLiveMode(), false);
+-					break;
+-				default:
+-					break;
+-			}
+-
+ 			switch (syscall) {
+ 			case MQ_OPEN: if(REPORT_IPC){ ipcManager.handleMq_open(eventData, syscall); } break;
+ 			case MQ_TIMEDSEND: if(REPORT_IPC){ ipcManager.handleMq_timedsend(eventData, syscall); } break;
+@@ -1222,15 +1215,11 @@ public class Audit extends AbstractReporter {
+ 				break;
+ 			case SENDMSG:
+ 			case SENDTO:
+-				if(!kernelModuleConfiguration.isHandleLocalEndpoints()){
+-					handleIOEvent(syscall, eventData, false, eventData.get(AuditEventReader.EXIT));
+-				}
++				handleIOEvent(syscall, eventData, false, eventData.get(AuditEventReader.EXIT));
+ 				break;
+ 			case RECVFROM: 
+ 			case RECVMSG:
+-				if(!kernelModuleConfiguration.isHandleLocalEndpoints()){
+-					handleIOEvent(syscall, eventData, true, eventData.get(AuditEventReader.EXIT));
+-				}
++				handleIOEvent(syscall, eventData, true, eventData.get(AuditEventReader.EXIT));
+ 				break;
+ 			case READ: 
+ 			case READV:
+@@ -1280,25 +1269,20 @@ public class Audit extends AbstractReporter {
+ 				handleDup(eventData, syscall);
+ 				break;
+ 			case SOCKET:
+-				if(!kernelModuleConfiguration.isHandleLocalEndpoints()){
+-					handleSocket(eventData, syscall);
+-				}
++				handleSocket(eventData, syscall);
+ 				break;
+ 			case BIND:
+-				if(!kernelModuleConfiguration.isHandleLocalEndpoints()){
+-					handleBind(eventData, syscall);
+-				}
++				handleBind(eventData, syscall);
+ 				break;
+ 			case ACCEPT4:
+ 			case ACCEPT:
+-				if(!kernelModuleConfiguration.isHandleLocalEndpoints()){
+-					handleAccept(eventData, syscall);
+-				}
++				handleAccept(eventData, syscall);
+ 				break;
+ 			case CONNECT:
+-				if(!kernelModuleConfiguration.isHandleLocalEndpoints()){
+-					handleConnect(eventData, syscall);
+-				}
++				//if(!kernelModuleConfiguration.isHandleLocalEndpoints()){
++				//	handleConnect(eventData, syscall);
++				//}
++                handleConnect(eventData, syscall);
+ 				break;
+ 			case RENAME:
+ 			case RENAMEAT:
+@@ -1328,7 +1312,7 @@ public class Audit extends AbstractReporter {
+ 				handleTruncate(eventData, syscall);
+ 				break;
+ 			default: //SYSCALL.UNSUPPORTED
+-				//log(Level.INFO, "Unsupported syscall '"+syscallNum+"'", null, eventData.get("time"), eventId, syscall);
++				log(Level.INFO, "Unsupported syscall '"+syscallNum+"'", null, eventData.get("time"), eventId, syscall);
+ 			}
+ 		} catch (Exception e) {
+ 			logger.log(Level.WARNING, "Error processing finish syscall event with eventid '"+eventId+"'", e);
+diff --git a/src/spade/reporter/audit/Input.java b/src/spade/reporter/audit/Input.java
+index 29187f10..4e0934ef 100644
+--- a/src/spade/reporter/audit/Input.java
++++ b/src/spade/reporter/audit/Input.java
+@@ -87,7 +87,7 @@ public class Input{
+ 		return spadeAuditBridgeName;
+ 	}
+ 	
+-	public String getLinuxAuditSocketPath(){
++    public String getLinuxAuditSocketPath() {
+ 		return linuxAuditSocketPath;
+ 	}
+ 	
+diff --git a/src/spade/reporter/audit/SYSCALL.java b/src/spade/reporter/audit/SYSCALL.java
+index 7de5bdc5..178d6c31 100644
+--- a/src/spade/reporter/audit/SYSCALL.java
++++ b/src/spade/reporter/audit/SYSCALL.java
+@@ -156,4 +156,169 @@ public enum SYSCALL{
+ 			default:	return UNSUPPORTED;
+ 		}
+ 	}
+-}
++
++    public static SYSCALL get64BitArmSyscall(int syscallNum) {
++        switch (syscallNum) {
++        case 180:
++            return MQ_OPEN;
++        case 182:
++            return MQ_TIMEDSEND;
++        case 183:
++            return MQ_TIMEDRECEIVE;
++        case 181:
++            return MQ_UNLINK;
++        case 194:
++            return SHMGET;
++        case 196:
++            return SHMAT;
++        case 197:
++            return SHMDT;
++        case 195:
++            return SHMCTL;
++        case 186:
++            return MSGGET;
++        case 301:
++            return MSGSND;
++        case 188:
++            return MSGRCV;
++        case 187:
++            return MSGCTL;
++        case 268:
++            return SETNS;
++        case 97:
++            return UNSHARE;
++        case 41:
++            return PIVOT_ROOT;
++        case 51:
++            return CHROOT;
++        case 49:
++            return CHDIR;
++        case 50:
++            return FCHDIR;
++        case 62:
++            return LSEEK;
++        case 233:
++            return MADVISE;
++        case 129:
++            return KILL;
++        case 117:
++            return PTRACE;
++        case 199:
++            return SOCKETPAIR;
++        case 105:
++            return INIT_MODULE;
++        case 273:
++            return FINIT_MODULE;
++        case 77:
++            return TEE;
++        case 76:
++            return SPLICE;
++        case 75:
++            return VMSPLICE;
++        case 202:
++            return ACCEPT;
++        case 242:
++            return ACCEPT4;
++        case 200:
++            return BIND;
++        //case return CHMOD;
++        //case return CREAT;
++        case 57:
++            return CLOSE;
++        case 220:
++            return CLONE;
++        case 203:
++            return CONNECT;
++        case 23:
++            return DUP;
++        case 24:
++            return DUP3;
++        case 221:
++            return EXECVE;
++        case 93:
++            return EXIT;
++        case 94:
++            return EXIT_GROUP;
++        case 52:
++            return FCHMOD;
++        case 53:
++            return FCHMODAT;
++        case 25:
++            return FCNTL;
++        //case return FORK;
++        //case return VFORK;
++        case 46:
++            return FTRUNCATE;
++        //case return LINK;
++        case 37:
++            return LINKAT;
++        //case 	return MKNOD;
++        case 33:
++            return MKNODAT;
++        case 222:
++            return MMAP;
++        case 226:
++            return MPROTECT;
++        //case return OPEN;
++        case 56:
++            return OPENAT;
++        //case return PIPE;
++        case 59:
++            return PIPE2;
++        case 67:
++            return PREAD;
++        case 69:
++            return PREADV;
++        case 68:
++            return PWRITE;
++        case 70:
++            return PWRITEV;
++        case 63:
++            return READ;
++        case 65:
++            return READV;
++        case 207:
++            return RECVFROM;
++        case 212:
++            return RECVMSG;
++        case 38:
++            return RENAMEAT;
++        case 211:
++            return SENDMSG;
++        case 206:
++            return SENDTO;
++        case 152:
++            return SETFSGID;
++        case 151:
++            return SETFSUID;
++        case 144:
++            return SETGID;
++        case 143:
++            return SETREGID;
++        case 149:
++            return SETRESGID;
++        case 147:
++            return SETRESUID;
++        case 145:
++            return SETREUID;
++        case 146:
++            return SETUID;
++        case 198:
++            return SOCKET;
++        case 36:
++            return SYMLINKAT;
++        case 45:
++            return TRUNCATE;
++        case 35:
++            return UNLINKAT;
++        case 64:
++            return WRITE;
++        case 66:
++            return WRITEV;
++        default:
++            return UNSUPPORTED;
++
++        }
++    }
++
++}
+\ No newline at end of file
+diff --git a/src/spade/reporter/audit/kernel-modules/build.h b/src/spade/reporter/audit/kernel-modules/build.h
+new file mode 100644
+index 00000000..47dca3bc
+--- /dev/null
++++ b/src/spade/reporter/audit/kernel-modules/build.h
+@@ -0,0 +1,4 @@
++/* AUTOGENERATED. DON'T MODIFY BY HAND */
++#define BUILD_HASH "949b5e4fef7c01b437867c69dcb14087ae862067d28b5eb88baa0441f716ca7b"
++#define MAIN_MODULE_NAME "netio"
++#define CONTROLLER_MODULE_NAME "netio_controller"
+diff --git a/src/spade/reporter/spadeAuditBridge.c b/src/spade/reporter/spadeAuditBridge.c
+index f57726a2..66205b1d 100644
+--- a/src/spade/reporter/spadeAuditBridge.c
++++ b/src/spade/reporter/spadeAuditBridge.c
+@@ -37,7 +37,7 @@ http://www-01.ibm.com/support/knowledgecenter/ssw_i5_54/rzab6/xconoclient.htm
+ #include <time.h>
+ #include <errno.h>
+ 
+-#define SERVER_PATH     "/var/run/audispd_events"
++#define SERVER_PATH     "/var/run/iot_events"
+ #define BUFFER_LENGTH   10000
+ #define FALSE           0
+ #define TRUE		1
+@@ -1550,7 +1550,7 @@ void syscall_handler(char *buf)
+ }
+ 
+ #define EVENT_LENGTH 1048576
+-#define REORDERING_WINDOW 10000
++#define REORDERING_WINDOW 10
+ int next_event_id = 0;
+ 
+ int UBSI_buffer_flush()
+@@ -1616,7 +1616,7 @@ int UBSI_buffer(const char *buf)
+ 								ptr = strstr(event, ":");
+ 								if(ptr == NULL) {
+ 										id = -1; // to indicate error. it is set back to zero once it gets out of the if condition.
+-										printf("ERROR: cannot parse event id.\n");
++										printf("ERROR: cannot parse event id. $$$$$event: %s\n", event);
+ 								} else {
+ 										id = strtol(ptr+1, NULL, 10);
+ 										if(next_event_id == 0) next_event_id = id;
+diff --git a/src/spade/reporter/spade_reporter_LinuxFUSE.h b/src/spade/reporter/spade_reporter_LinuxFUSE.h
+new file mode 100644
+index 00000000..45bd623e
+--- /dev/null
++++ b/src/spade/reporter/spade_reporter_LinuxFUSE.h
+@@ -0,0 +1,21 @@
++/* DO NOT EDIT THIS FILE - it is machine generated */
++#include <jni.h>
++/* Header for class spade_reporter_LinuxFUSE */
++
++#ifndef _Included_spade_reporter_LinuxFUSE
++#define _Included_spade_reporter_LinuxFUSE
++#ifdef __cplusplus
++extern "C" {
++#endif
++/*
++ * Class:     spade_reporter_LinuxFUSE
++ * Method:    launchFUSE
++ * Signature: (Ljava/lang/String;)I
++ */
++JNIEXPORT jint JNICALL Java_spade_reporter_LinuxFUSE_launchFUSE
++  (JNIEnv *, jobject, jstring);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
