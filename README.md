@@ -32,7 +32,7 @@ Please refer to the OP-TEE documentation for information on performing a TA.
 
 The following is an example of the settings required to operate TA-Collect and a simple operation check.
 First, configure rules for Linux Audit. This configuration must be done using the auditctl command.
-Also, since TEE-PA needs to exclude tee-supplicant system calls, configure Linux Audit rules to exclude tee-supplicant PID.
+Also, since this software needs to exclude tee-supplicant system calls, configure Linux Audit rules to exclude tee-supplicant PID.
 - Run the `TEE_SUPP_PID=$(pidof tee-supplicant)` command to obtain the PID of the tee-supplicant
 - Run the `auditctl -a exit,always -F arch=aarch64 -S read -S readv -S write -S writev -S kill -S exit -S exit_group -S connect -S sendto -S recvfrom -S sendmsg -S recvmsg -S mmap -S linkat -S symlinkat -S execve -S close -S openat -S dup -S bind -S accept -S accept4 -S renameat -S memfd_create -F pid!=$TEE_SUPP_PID` command to configure the audit rules
 

@@ -117,7 +117,7 @@ class TCPServer(Thread):
 
     def save_audit_log(self):
         temp = ""
-        save_audit_log_name = "TEE-PA_" + datetime.now().strftime("%m.%d.%Y-%H") + ".log"
+        save_audit_log_name = "TEST_" + datetime.now().strftime("%m.%d.%Y-%H") + ".log"
         if len(self.audit_buffer) > 5:
             while(len(self.audit_buffer) > 10):
                 temp += self.audit_buffer.popleft()
