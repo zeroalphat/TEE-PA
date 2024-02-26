@@ -1,8 +1,7 @@
 # TEE-PA
 
-This repository contains a prototype of the TEE-PA which will be presented at IEEE Access.
-
-For all technical details, please refer to out paper.
+This repository contains a prototype of the TEE-PA which is presented at IEEE Access.  
+For all technical details, please refer to [our paper](https://ieeexplore.ieee.org/document/10436677).
 
 ## Evaluation Platform
 
@@ -96,3 +95,18 @@ Each component is subject to its own license.
 - OP-TEE version 3.11.0: GPLv2
 - TA (Trusted Application): MIT
 - Log Receiver: MIT
+
+## Citation
+
+```
+@ARTICLE{10436677,
+  author={Takemura, Taichi and Yamamoto, Ryo and Suzaki, Kuniyasu},
+  journal={IEEE Access}, 
+  title={TEE-PA: TEE Is a Cornerstone for Remote Provenance Auditing on Edge Devices With Semi-TCB}, 
+  year={2024},
+  volume={12},
+  number={},
+  pages={26536-26549},
+  doi={10.1109/ACCESS.2024.3366344}
+}
+```
